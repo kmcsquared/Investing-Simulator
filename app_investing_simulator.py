@@ -4,23 +4,24 @@ import datetime
 import pandas as pd
 import streamlit as st
 import yfinance as yf
+import plotly.express as px
 from currency_converter import CurrencyConverter
 from dateutil.relativedelta import relativedelta
 import helper
 
 st.set_page_config(layout='wide')
-st.title('Investing Simulator')
+st.title('Investing Simulator (Dollar-Cost Averaging)')
 st.write(
     '''
-    - This app allows you to simulate how your investments would have developed 
-    over time if you had invested periodically in the past.
+    - This app allows you to simulate how your investments would have performed over time 
+    if you had invested on a monthly basis, inspired by the [dollar-cost averaging](
+    https://www.investopedia.com/terms/d/dollarcostaveraging.asp) strategy.
 
     - The simulation assumes that it is possible to buy fractional shares
-    and that there are no currency exchange fees. Note that some currency 
-    exchange rates might be [missing](https://pypi.org/project/CurrencyConverter/).
+    and that there are no currency exchange fees.
 
-    - If the periodic investment happens to be on a day when the market is closed,
-    the buy order will be executed in the next market opening.
+    - If the scheduled investment happens to be on a day when the market 
+    is closed, the buy order will be executed in the next market opening.
     '''
 )
 
@@ -66,7 +67,11 @@ with st.form('input_investment_parameters'):
         base_currency = st.selectbox(
             label='Select your base currency.',
             options=currencies,
-            index=currencies.index('USD')
+            index=currencies.index('USD'),
+            help='''
+            If the security is traded in a currency that is not your base currency, 
+            a currency exchange will occur.
+            '''
         )
 
     input_ticker_symbol = st.text_input(
@@ -102,11 +107,11 @@ if st.session_state['submitted']:
 
     # If periodic investment day is not within the date range
     if not is_date_correct:
-        st.write('Please select a periodic investment day within the date range.')
         st.write(
             f'''
             The periodic investment day ({investment_day}) is outside of the
-            date range {date_start:%B} {date_start.day}-{date_end.day}
+            date range {date_start:%B} {date_start.day} - {date_end:%B} {date_end.day},
+            please select a periodic investment day within the date range.
             '''
         )
 
@@ -163,29 +168,27 @@ if st.session_state['submitted']:
             # Columns: Investment date, symbol, amount of shares bought, buy price
             rows = []   # Build DataFrame with list of lists (each list is a row)
 
-            # Store historical security prices
-            if 'dfs_securities' not in st.session_state:
-                st.session_state['dfs_securities'] = {}
-
-            INVESTMENT_EXISTS = False
+            INVESTMENT_EXISTS = False   # Flag to output message if no investment exists
             symbols = sorted(symbols)
+            dfs_downloads = {}
+            downloaded_symbols = set()
+
             # Get the buy price for each investment date and symbol
             while current_investment_date <= date_end:
                 for symbol in symbols:
-                    if symbol not in st.session_state['dfs_securities']:
+                    if symbol not in downloaded_symbols:
                         df_security = yf.download(
                             tickers=symbol,
-                            start=date_start,
+                            start=current_investment_date,
                             end=today,
                             actions=True,
                             rounding=True
                         )
 
-                        st.session_state['dfs_securities'][symbol] = df_security
+                        dfs_downloads[symbol] = df_security
+                        downloaded_symbols.add(symbol)
 
-                    df_investments_symbol = st.session_state['dfs_securities'][symbol].copy()
-
-                    is_data_found_for_symbol = len(df_investments_symbol) != 0
+                    is_data_found_for_symbol = len(dfs_downloads[symbol]) != 0
                     # If no data was found for symbol
                     if not is_data_found_for_symbol:
                         st.write(
@@ -200,10 +203,10 @@ if st.session_state['submitted']:
                         # Create row for DataFrame
                         row = []
 
-                        market_open_dates = df_investments_symbol.index.date
+                        market_open_dates = dfs_downloads[symbol].index.date
                         # If market is open, buy on investment date
                         if current_investment_date in market_open_dates:
-                            buy_price_original = df_investments_symbol.loc[
+                            buy_price_original = dfs_downloads[symbol].loc[
                                 market_open_dates == current_investment_date,
                                 'Open'
                             ].iloc[0]
@@ -232,7 +235,7 @@ if st.session_state['submitted']:
                                 )
                                 break
 
-                            future_dates = df_investments_symbol.loc[is_future_date]
+                            future_dates = dfs_downloads[symbol].loc[is_future_date]
                             next_market_open = future_dates.reset_index().iloc[0]
                             buy_price_original = next_market_open['Open']
                             actual_investment_date = next_market_open['Date'].date()
@@ -267,9 +270,9 @@ if st.session_state['submitted']:
                     row.append(tickers[symbol].info['quoteType'])
                     row.append(currency_security)
                     row.append(num_shares_bought)
-                    row.append(buy_price_original)
-                    row.append(buy_price_converted)
-                    row.append(investment_amount)
+                    row.append(round(buy_price_original, 2))
+                    row.append(round(buy_price_converted, 2))
+                    row.append(round(investment_amount, 2))
                     rows.append(row)
 
                 # Once the investment date is covered for both symbols,
@@ -288,12 +291,16 @@ if st.session_state['submitted']:
 
             # If able to execute at least 1 buy order
             if INVESTMENT_EXISTS:
+                first_investment_date = rows[0][0]
+                last_investment_date = rows[-1][0]
                 st.write(
                     f'''
                     You will invest in the following {NUM_SECURITIES_INVESTED}
-                    {'security' if NUM_SECURITIES_INVESTED == 1 else 'securities'}
-                    on day {investment_day} of each month from
-                    {date_start:%B %d (%Y)} until {date_end:%B %d (%Y)}:
+                    [{'security' if NUM_SECURITIES_INVESTED == 1 else 'securities'}](
+                    https://www.investopedia.com/terms/s/security.asp)
+                    on day {investment_day} of each month from the first available
+                    investment date ({first_investment_date:%B %d, %Y}) until
+                    the last available investment date ({last_investment_date:%B %d, %Y}).
                     '''
                 )
 
@@ -331,15 +338,18 @@ if st.session_state['submitted']:
 
                 # Match values from dictionary to dataframe row values and add data to that row
                 df_investments['Current Share Price (Original Currency)'] = df_investments['Symbol'].apply(
-                    lambda x: st.session_state['dfs_securities'][x]['Close'].iloc[-1]
+                    lambda x: round(dfs_downloads[x]['Close'].iloc[-1], 2)
                 )
 
                 df_investments[f'Current Share Price ({base_currency})'] = df_investments.apply(
-                    lambda row: curr_conv.convert(
-                        amount=row['Current Share Price (Original Currency)'],
-                        currency=row['Original Currency'],
-                        new_currency=base_currency,
-                        date=today
+                    lambda row: round(
+                        curr_conv.convert(
+                            amount=row['Current Share Price (Original Currency)'],
+                            currency=row['Original Currency'],
+                            new_currency=base_currency,
+                            date=today
+                        ),
+                        2
                     ),
                     axis=1
                 )
@@ -353,7 +363,7 @@ if st.session_state['submitted']:
                 # Put together historical data for each symbol
                 df_development_list = []
 
-                for symbol, data in st.session_state['dfs_securities'].items():
+                for symbol, data in dfs_downloads.items():
                     data['Symbol'] = symbol
                     data = data[['Symbol', 'Close', 'Dividends']]
                     df_development_list.append(data)
@@ -362,7 +372,6 @@ if st.session_state['submitted']:
                 df_development = pd.concat(df_development_list)
                 df_development = df_development.sort_values(['Date', 'Symbol']).reset_index()
                 df_development['Date'] = df_development['Date'].dt.date
-                st.write(f'Days since first investment: {len(df_development['Date'].unique())}')
 
                 # For each day, track the user's investments' development
                 cols_to_date = [
@@ -374,14 +383,88 @@ if st.session_state['submitted']:
                 ]
 
                 df_development[cols_to_date] = df_development.apply(
-                    lambda x: helper.get_values_to_date(x, df_investments, base_currency),
+                    lambda row: helper.get_values_to_date(row, df_investments, base_currency),
                     axis=1,
                     result_type='expand'
                 )
 
-                st.dataframe(df_development, use_container_width=True)
+                st.subheader('Unrealised Gain/Loss')
+                st.write(
+                    '''
+                    - The metrics below show the overall gain (or loss) of the scheduled investements 
+                    over a time period, as well as the difference in percentage return of the 
+                    investment value since then.
 
-                st.subheader('Dividends')
+                    - You can click on the legend to show/hide each symbol.
+                    '''
+                )
+
+                # Keep only dates where all symbols have data
+                counts = df_development['Date'].value_counts()
+                df_grouped_all_symbols_per_date = df_development.loc[df_development['Date'].isin(counts.index[counts.gt(NUM_SECURITIES_INVESTED-1)])].copy()
+                cols_to_sum = [f'{col} to Date ({base_currency})' for col in ['Invested Capital', 'Investment Value', 'Unrealised Gain/Loss']]
+                df_grouped = df_grouped_all_symbols_per_date.groupby('Date')[cols_to_sum].sum().reset_index()
+                df_grouped['Percentage Return'] = (df_grouped[f'Unrealised Gain/Loss to Date ({base_currency})'] / df_grouped[f'Invested Capital to Date ({base_currency})']) * 100
+                df_grouped['Percentage Return'] = df_grouped['Percentage Return'].round(2)
+                df_grouped['Symbol'] = '--OVERALL PERFORMANCE--'
+
+                # Period performance metrics
+                metrics = ['1D', '1W', '1M', '6M', 'YTD', '1Y', '5Y', 'MAX']
+                metric_cols = st.columns(len(metrics))  # Show metrics horizontally
+                for col_idx, metric in enumerate(metrics):
+                    metric_gain_loss, metric_pct_change = helper.calculate_development_metric(
+                        metric,
+                        df_grouped.loc[df_grouped['Symbol'] == '--OVERALL PERFORMANCE--'],
+                        base_currency
+                    )
+
+                    with metric_cols[col_idx]:
+                        st.metric(
+                            label=f'{metric} ({base_currency})',
+                            value=metric_gain_loss,
+                            delta=metric_pct_change
+                        )
+
+                df_development_plot = pd.concat([df_development, df_grouped], ignore_index=True)
+                df_development_plot = df_development_plot.sort_values(['Date', 'Symbol'])
+                df_development_plot = df_development_plot.reset_index(drop=True)
+                df_development_plot[f'Unrealised Gain/Loss to Date ({base_currency})'] = df_development_plot[f'Unrealised Gain/Loss to Date ({base_currency})'].round(2)
+                df_development_plot[f'Investment Value to Date ({base_currency})'] = df_development_plot[f'Investment Value to Date ({base_currency})'].round(2)
+
+                st.dataframe(df_development_plot)
+
+                fig_gain_loss = px.line(
+                    df_development_plot,
+                    x='Date',
+                    y=f'Unrealised Gain/Loss to Date ({base_currency})',
+                    color='Symbol',
+                )
+                fig_gain_loss.update_layout(yaxis_title=f'Unrealised Gain/Loss ({base_currency})')
+                st.plotly_chart(fig_gain_loss)
+
+                fig_pct_return = px.line(
+                    df_development_plot,
+                    x='Date',
+                    y='Percentage Return',
+                    color='Symbol',
+                )
+                # Select only overall performance by default
+                # https://stackoverflow.com/questions/74322004/how-to-have-one-item-in-the-legend-selected-by-default-in-plotly-dash
+                fig_pct_return.update_traces(visible='legendonly')
+                fig_pct_return.data[0].visible = True
+                st.plotly_chart(fig_pct_return)
+
+                st.header('Portfolio Weight')
+
+                df_grouped_all_symbols_per_date[f'Investment Value to Date ({base_currency})'] = df_grouped_all_symbols_per_date[f'Investment Value to Date ({base_currency})'].round(2)
+                fig_pie = px.pie(
+                    df_grouped_all_symbols_per_date.iloc[-NUM_SECURITIES_INVESTED:],
+                    values=f'Investment Value to Date ({base_currency})',
+                    names='Symbol'
+                )
+                st.plotly_chart(fig_pie)
+
+                st.header('Dividends')
 
                 dividends = df_development.loc[df_development['Dividends'] != 0]
                 dividends = dividends.reset_index(drop=True)
@@ -396,6 +479,7 @@ if st.session_state['submitted']:
                 )
 
                 dividends[f'Dividend Income ({base_currency})'] = dividends[f'Dividend per Share ({base_currency})'] * dividends['Shares to Date']
+                dividends[f'Dividend Income ({base_currency})'] = dividends[f'Dividend Income ({base_currency})'].round(2)
                 dividends = dividends[
                     [
                         'Date',

@@ -1,4 +1,5 @@
 CurrencyConverter
 pandas
+plotly
 streamlit
 yfinance
