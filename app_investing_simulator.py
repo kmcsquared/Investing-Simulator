@@ -6,7 +6,6 @@ import streamlit as st
 import yfinance as yf
 import plotly.express as px
 from currency_converter import CurrencyConverter
-from dateutil.relativedelta import relativedelta
 import helper
 
 st.set_page_config(layout='wide')
@@ -22,6 +21,9 @@ st.write(
 
     - If the scheduled investment happens to be on a day when the market 
     is closed, the buy order will be executed in the next market opening.
+    
+    - Orders are executed at market open by default and are compared against
+    market close prices for each date.
     '''
 )
 
@@ -48,11 +50,10 @@ with st.form('input_investment_parameters'):
         )
 
     with col_input_2:
-        investment_day = st.selectbox(
-            label='On what day of the month will you invest?',
-            options=range(1,29),
-            index=0,
-            help='Make sure there is at least one investment day in the selected date range.'
+        investment_frequency = st.selectbox(
+            label='How often will you invest?',
+            options=['Daily', 'Weekly', 'Monthly'],
+            index=2,
         )
 
     with col_input_3:
@@ -98,28 +99,11 @@ with st.form('input_investment_parameters'):
 
 if st.session_state['submitted']:
 
-    # Find correct start date
-    is_date_correct, current_investment_date = helper.is_investment_day_valid(
-        investment_day=investment_day,
-        date_start=date_start,
-        date_end=date_end
-    )
-
-    # If periodic investment day is not within the date range
-    if not is_date_correct:
-        st.write(
-            f'''
-            The periodic investment day ({investment_day}) is outside of the
-            date range {date_start:%B} {date_start.day} - {date_end:%B} {date_end.day},
-            please select a periodic investment day within the date range.
-            '''
-        )
-
     # If user has not entered any ticker symbols
-    elif input_ticker_symbol == '':
+    if input_ticker_symbol == '':
         st.write('Please enter at least one ticker symbol.')
 
-    # If user has valid investment day and entered a symbol
+    # If user has entered a symbol
     else:
 
         tickers = {}                # Store yf.Ticker objects
@@ -169,85 +153,74 @@ if st.session_state['submitted']:
             rows = []   # Build DataFrame with list of lists (each list is a row)
 
             INVESTMENT_EXISTS = False   # Flag to output message if no investment exists
-            symbols = sorted(symbols)
-            dfs_downloads = {}
-            downloaded_symbols = set()
+            downloaded_symbols = set()  # Symbols for which download has been attempted
+            dfs_downloads = {}          # DataFrames of symbols with retrieved data
 
             # Get the buy price for each investment date and symbol
+            current_investment_date = datetime.date(
+                day=date_start.day,
+                month=date_start.month,
+                year=date_start.year
+            )
+
             while current_investment_date <= date_end:
-                for symbol in symbols:
+                for symbol in sorted(symbols):
                     if symbol not in downloaded_symbols:
                         df_security = yf.download(
                             tickers=symbol,
-                            start=current_investment_date,
+                            start=date_start,
                             end=today,
                             actions=True,
                             rounding=True
                         )
 
-                        dfs_downloads[symbol] = df_security
                         downloaded_symbols.add(symbol)
 
-                    is_data_found_for_symbol = len(dfs_downloads[symbol]) != 0
-                    # If no data was found for symbol
-                    if not is_data_found_for_symbol:
-                        st.write(
-                            f'''
-                            Unfortunately no price data was found for {symbol} from
-                            {date_start:%B %d %Y} until {today:%B %d %Y}.
-                            '''
-                        )
+                        # If no data was found for symbol
+                        if len(df_security) == 0:
+                            st.write(
+                                f'''
+                                Unfortunately no price data was found for {symbol} from
+                                {date_start:%B %d %Y} until {today:%B %d %Y}.
+                                '''
+                            )
 
-                    # If data was found for symbol
-                    if is_data_found_for_symbol:
-                        # Create row for DataFrame
-                        row = []
+                            continue
 
-                        market_open_dates = dfs_downloads[symbol].index.date
-                        # If market is open, buy on investment date
-                        if current_investment_date in market_open_dates:
-                            buy_price_original = dfs_downloads[symbol].loc[
-                                market_open_dates == current_investment_date,
-                                'Open'
-                            ].iloc[0]
+                        dfs_downloads[symbol] = df_security
 
-                            actual_investment_date = current_investment_date
-                            INVESTMENT_EXISTS = True
+                    # Create row for DataFrame
+                    row = []
 
-                            # st.write(
-                            #     f'''
-                            #     {symbol}
-                            #     - Scheduled day: {current_investment_date}
-                            #     - Actual investment date: {actual_investment_date}
-                            #     '''
-                            # )
+                    market_open_dates = dfs_downloads[symbol].index.date
+                    # If market is open, buy on investment date
+                    if current_investment_date in market_open_dates:
+                        buy_price_original = dfs_downloads[symbol].loc[
+                            market_open_dates == current_investment_date,
+                            'Open'
+                        ].iloc[0]
 
-                        # If market is closed, buy at next market open
-                        if current_investment_date not in market_open_dates:
-                            is_future_date = market_open_dates > current_investment_date
-                            # If market has not opened yet in the future, break
-                            if is_future_date.sum() == 0:
-                                st.write(
-                                    f'''
-                                    No market data was found for {symbol} scheduled investment on
-                                    {current_investment_date} or the following market open.
-                                    '''
-                                )
-                                break
+                        actual_investment_date = current_investment_date
+                        INVESTMENT_EXISTS = True
 
-                            future_dates = dfs_downloads[symbol].loc[is_future_date]
-                            next_market_open = future_dates.reset_index().iloc[0]
-                            buy_price_original = next_market_open['Open']
-                            actual_investment_date = next_market_open['Date'].date()
-                            INVESTMENT_EXISTS = True
+                    # If market is closed, buy at next market open
+                    else:
+                        is_future_date = market_open_dates > current_investment_date
+                        # If market has not opened yet in the future, break
+                        if is_future_date.sum() == 0:
+                            st.write(
+                                f'''
+                                No market data was found for {symbol} scheduled investment on
+                                {current_investment_date} or the following market open.
+                                '''
+                            )
+                            break
 
-                            # st.write(
-                            #     f'''
-                            #     {symbol}
-                            #     - Scheduled day: {current_investment_date}
-                            #     - Actual investment date: {actual_investment_date}
-                            #     '''
-                            # )
+                        future_dates = dfs_downloads[symbol].loc[is_future_date]
+                        next_market_open = future_dates.reset_index().iloc[0]
+                        buy_price_original = next_market_open['Open']
+                        actual_investment_date = next_market_open['Date'].date()
+                        INVESTMENT_EXISTS = True
 
                     # Convert buy price from security's currency to base currency
                     currency_security = tickers[symbol].info['currency']
@@ -275,32 +248,34 @@ if st.session_state['submitted']:
                     row.append(round(investment_amount, 2))
                     rows.append(row)
 
-                # Once the investment date is covered for both symbols,
-                # move on to next month
-                current_investment_date += relativedelta(months=1)
+                # Once the investment date is covered for
+                # all symbols, move on to next date
+                current_investment_date = helper.update_investment_date(
+                    current_investment_date,
+                    investment_frequency
+                )
 
             # If unable to execute any buy orders
             if not INVESTMENT_EXISTS:
                 st.write(
-                    f'''
-                    There was no data retrieved for any investments on your investment day 
-                    ({investment_day}) between the selected start and end dates. Perhaps try
-                    a different investment day.
+                    '''
+                    There was no data retrieved for any investments between the selected
+                    start and end dates. Perhaps try a different investment day.
                     '''
                 )
 
             # If able to execute at least 1 buy order
-            if INVESTMENT_EXISTS:
+            else:
                 first_investment_date = rows[0][0]
                 last_investment_date = rows[-1][0]
                 st.write(
                     f'''
                     You will invest in the following {NUM_SECURITIES_INVESTED}
                     [{'security' if NUM_SECURITIES_INVESTED == 1 else 'securities'}](
-                    https://www.investopedia.com/terms/s/security.asp)
-                    on day {investment_day} of each month from the first available
-                    investment date ({first_investment_date:%B %d, %Y}) until
-                    the last available investment date ({last_investment_date:%B %d, %Y}).
+                    https://www.investopedia.com/terms/s/security.asp) on a
+                    {investment_frequency.lower()} basis from the first available
+                    investment date ({first_investment_date:%B %d, %Y}) until the last
+                    available investment date ({last_investment_date:%B %d, %Y}).
                     '''
                 )
 
@@ -325,6 +300,11 @@ if st.session_state['submitted']:
                         f'Invested Capital ({base_currency})'
                     ]
                 )
+
+                # When investing daily and meeting a closed market date,
+                # the simulation would invest twice in the next open date
+                if investment_frequency == 'Daily':
+                    df_investments = df_investments.drop_duplicates(['Purchase Date', 'Symbol'])
 
                 # Convert to datetime.date
                 df_investments['Purchase Date'] = pd.to_datetime(df_investments['Purchase Date'])
@@ -360,6 +340,16 @@ if st.session_state['submitted']:
 
                 st.header('Development')
 
+                st.write(
+                    '''
+                    - The metrics below show the overall gain (or loss) of the scheduled
+                    investements over a time period, as well as the difference in 
+                    percentage return of the investment value since then.
+
+                    - You can click on the legend to show/hide each symbol.
+                    '''
+                )
+
                 # Put together historical data for each symbol
                 df_development_list = []
 
@@ -388,25 +378,18 @@ if st.session_state['submitted']:
                     result_type='expand'
                 )
 
-                st.subheader('Unrealised Gain/Loss')
-                st.write(
-                    '''
-                    - The metrics below show the overall gain (or loss) of the scheduled investements 
-                    over a time period, as well as the difference in percentage return of the 
-                    investment value since then.
-
-                    - You can click on the legend to show/hide each symbol.
-                    '''
-                )
-
                 # Keep only dates where all symbols have data
                 counts = df_development['Date'].value_counts()
-                df_grouped_all_symbols_per_date = df_development.loc[df_development['Date'].isin(counts.index[counts.gt(NUM_SECURITIES_INVESTED-1)])].copy()
-                cols_to_sum = [f'{col} to Date ({base_currency})' for col in ['Invested Capital', 'Investment Value', 'Unrealised Gain/Loss']]
-                df_grouped = df_grouped_all_symbols_per_date.groupby('Date')[cols_to_sum].sum().reset_index()
+                dates_with_all_symbols = counts.index[counts.eq(NUM_SECURITIES_INVESTED)]
+                df_all_symbols_per_date = df_development.loc[df_development['Date'].isin(dates_with_all_symbols)].copy()
+                # Aggregate symbols by date
+                cols_agg = ['Invested Capital', 'Investment Value', 'Unrealised Gain/Loss']
+                cols_agg = [f'{col} to Date ({base_currency})' for col in cols_agg]
+                df_grouped = df_all_symbols_per_date.groupby('Date')[cols_agg].sum()
+                df_grouped = df_grouped.reset_index()
                 df_grouped['Percentage Return'] = (df_grouped[f'Unrealised Gain/Loss to Date ({base_currency})'] / df_grouped[f'Invested Capital to Date ({base_currency})']) * 100
                 df_grouped['Percentage Return'] = df_grouped['Percentage Return'].round(2)
-                df_grouped['Symbol'] = '--OVERALL PERFORMANCE--'
+                df_grouped['Symbol'] = '--OVERALL--'
 
                 # Period performance metrics
                 metrics = ['1D', '1W', '1M', '6M', 'YTD', '1Y', '5Y', 'MAX']
@@ -414,7 +397,7 @@ if st.session_state['submitted']:
                 for col_idx, metric in enumerate(metrics):
                     metric_gain_loss, metric_pct_change = helper.calculate_development_metric(
                         metric,
-                        df_grouped.loc[df_grouped['Symbol'] == '--OVERALL PERFORMANCE--'],
+                        df_grouped.loc[df_grouped['Symbol'] == '--OVERALL--'],
                         base_currency
                     )
 
@@ -430,35 +413,61 @@ if st.session_state['submitted']:
                 df_development_plot = df_development_plot.reset_index(drop=True)
                 df_development_plot[f'Unrealised Gain/Loss to Date ({base_currency})'] = df_development_plot[f'Unrealised Gain/Loss to Date ({base_currency})'].round(2)
                 df_development_plot[f'Investment Value to Date ({base_currency})'] = df_development_plot[f'Investment Value to Date ({base_currency})'].round(2)
+                # st.dataframe(df_development_plot)
 
-                st.dataframe(df_development_plot)
-
-                fig_gain_loss = px.line(
-                    df_development_plot,
-                    x='Date',
-                    y=f'Unrealised Gain/Loss to Date ({base_currency})',
-                    color='Symbol',
+                tab_gain_loss, tab_pct_return = st.tabs(
+                    ['Unrealised Gain/Loss', 'Percentage Return']
                 )
-                fig_gain_loss.update_layout(yaxis_title=f'Unrealised Gain/Loss ({base_currency})')
-                st.plotly_chart(fig_gain_loss)
 
-                fig_pct_return = px.line(
-                    df_development_plot,
-                    x='Date',
-                    y='Percentage Return',
-                    color='Symbol',
-                )
-                # Select only overall performance by default
-                # https://stackoverflow.com/questions/74322004/how-to-have-one-item-in-the-legend-selected-by-default-in-plotly-dash
-                fig_pct_return.update_traces(visible='legendonly')
-                fig_pct_return.data[0].visible = True
-                st.plotly_chart(fig_pct_return)
+                with tab_gain_loss:
+                    fig_gain_loss = px.line(
+                        df_development_plot,
+                        x='Date',
+                        y=f'Unrealised Gain/Loss to Date ({base_currency})',
+                        color='Symbol',
+                    )
+
+                    fig_gain_loss.update_traces(hovertemplate=None)
+                    fig_gain_loss.update_layout(
+                        yaxis_title=f'Unrealised Gain/Loss ({base_currency})',
+                        hovermode='x unified'
+                    )
+                    st.plotly_chart(fig_gain_loss)
+
+                with tab_pct_return:
+
+                    fig_pct_return = px.line(
+                        df_development_plot,
+                        x='Date',
+                        y='Percentage Return',
+                        color='Symbol',
+                    )
+                    # Select only overall performance by default
+                    # https://stackoverflow.com/questions/74322004/how-to-have-one-item-in-the-legend-selected-by-default-in-plotly-dash
+                    fig_pct_return.update_traces(visible='legendonly')
+                    fig_pct_return.data[0].visible = True
+                    st.plotly_chart(fig_pct_return)
 
                 st.header('Portfolio Weight')
+                # TODO: Add date slider to see portfolio weight over time
+                with st.form('Date Slider'):
+                    date_slider = st.slider(
+                        label='Analyse portofolio distribution by date',
+                        min_value=df_all_symbols_per_date['Date'].min(),
+                        max_value=df_all_symbols_per_date['Date'].max(),
+                        format='MMM D, YYYY'
+                    )
 
-                df_grouped_all_symbols_per_date[f'Investment Value to Date ({base_currency})'] = df_grouped_all_symbols_per_date[f'Investment Value to Date ({base_currency})'].round(2)
+                    slider_ok = st.form_submit_button(
+                        label='Recalculate portfolio distribution',
+                        use_container_width=True
+                    )
+
+                df_pie = df_all_symbols_per_date.copy()
+                df_pie = df_pie.loc[df_pie['Date'] <= date_slider]
+
                 fig_pie = px.pie(
-                    df_grouped_all_symbols_per_date.iloc[-NUM_SECURITIES_INVESTED:],
+                    df_pie.iloc[-NUM_SECURITIES_INVESTED:],
                     values=f'Investment Value to Date ({base_currency})',
                     names='Symbol'
                 )

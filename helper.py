@@ -11,39 +11,26 @@ curr_conv = CurrencyConverter(
     fallback_on_wrong_date=True
 )
 
-def is_investment_day_valid(investment_day, date_start, date_end):
+def update_investment_date(investment_date, investment_frequency):
     """
-    Given a numerical day of the month, find out if there is any
-    day with such number between the start and end date
+    Increase investment date by user's investment frequency
 
-    :param investment_day: Day in which periodic investment occurs
-    :type investment_day: int
-    :param date_start: Start date for investment strategy
-    :type date_start: datetime.date
-    :param date_end: End date for investment strategy
-    :type date_end: datetime.date
-    :return: Whether there is an investment day within date range
-    :rtype: bool
-    :return: Actual start date if date is valid
+    :param investment_date: Scheduled investment date
+    :type investment_date: datetime.date
+    :param investment_frequency: One of 'Daily', 'Weekly' or 'Monthly'
+    :type investment_frequency: str
+    :return: Next scheduled investment date
     :rtype: datetime.date
     """
 
-    # Default start date is investment day in same month as start date
-    potential_start_date = datetime.date(
-        day=investment_day,
-        month=date_start.month,
-        year=date_start.year
-    )
+    if investment_frequency == 'Daily':
+        investment_date += relativedelta(days=1)
+    elif investment_frequency == 'Weekly':
+        investment_date += relativedelta(weeks=1)
+    else:
+        investment_date += relativedelta(months=1)
 
-    # Date is correct if it lies between start and end date
-    is_date_correct = date_start <= potential_start_date <= date_end
-
-    # Increase date by a month until
-    while not is_date_correct and potential_start_date <= date_end:
-        potential_start_date += relativedelta(months=1)
-        is_date_correct = date_start <= potential_start_date <= date_end
-
-    return is_date_correct, potential_start_date
+    return investment_date
 
 def get_values_to_date(row, df_investments, base_currency):
     """
