@@ -26,6 +26,8 @@ st.write(
     '''
 )
 
+today = datetime.datetime.now()
+
 st.header('Choose your investment strategy')
 # Ask user to decide investment date range, as well as frequency and amount for investing
 with st.form('input_investment_parameters'):
@@ -35,9 +37,9 @@ with st.form('input_investment_parameters'):
     with col_input_1:
         date_start, date_end = st.date_input(
             label='In what date range will you be investing?',
-            value=(datetime.date(day=1, month=1, year=helper.today.year), helper.today),
+            value=(datetime.date(day=1, month=1, year=today.year), today),
             min_value=datetime.date(day=1, month=1, year=1970),
-            max_value=helper.today,
+            max_value=today,
             format='DD/MM/YYYY'
         )
 
@@ -167,7 +169,7 @@ if st.session_state['submitted']:
                         df_security = yf.download(
                             tickers=symbol,
                             start=date_start,
-                            end=helper.today,
+                            end=date_end,
                             actions=True,
                             rounding=True
                         )
@@ -177,7 +179,7 @@ if st.session_state['submitted']:
                             st.write(
                                 f'''
                                 Unfortunately no price data was found for {symbol} from
-                                {date_start:%B %d %Y} until {helper.today:%B %d %Y}.
+                                {date_start:%B %d %Y} until {date_end:%B %d %Y}.
                                 '''
                             )
 
@@ -331,7 +333,7 @@ if st.session_state['submitted']:
                             amount=row['Current Share Price (Original Currency)'],
                             currency=row['Original Currency'],
                             new_currency=base_currency,
-                            date=helper.today
+                            date=date_end
                         ),
                         2
                     ),
@@ -414,7 +416,8 @@ if st.session_state['submitted']:
                         st.metric(
                             label=f'{metric} ({base_currency})',
                             value=metric_gain_loss,
-                            delta=metric_pct_change
+                            delta=metric_pct_change,
+                            delta_color='off' if metric_pct_change == '-' else 'normal'
                         )
 
                 df_development_plot = pd.concat([df_development, df_grouped], ignore_index=True)
@@ -512,31 +515,42 @@ if st.session_state['submitted']:
                 st.header('Dividends')
 
                 # Get dividends
-                dividends = df_development.loc[df_development['Dividends'] != 0]
-                dividends = dividends.reset_index(drop=True)
-                dividends = dividends.rename(
-                    columns={'Dividends': 'Dividend per Share (Original Currency)'}
-                )
+                is_dividend = df_development['Dividends'] != 0
+                if is_dividend.sum() == 0:
+                    st.write(
+                        f'''
+                        There are no dividends for any of your investments
+                        during the period {date_start:%B %d %Y} until {date_end:%B %d %Y}.
+                        '''
+                    )
+                else:
 
-                # Convert dividends to base currency
-                dividends[['Original Currency', f'Dividend per Share ({base_currency})']] = dividends.apply(
-                    lambda x: helper.convert_dividends(x, base_currency, DF_INVESTMENTS),
-                    axis=1,
-                    result_type='expand'
-                )
+                    dividends = df_development.loc[is_dividend]
 
-                # Calculate income from dividends
-                dividends[f'Dividend Income ({base_currency})'] = dividends[f'Dividend per Share ({base_currency})'] * dividends['Shares to Date']
-                dividends[f'Dividend Income ({base_currency})'] = dividends[f'Dividend Income ({base_currency})'].round(2)
-                dividends = dividends[
-                    [
-                        'Date',
-                        'Symbol',
-                        'Shares to Date',
-                        'Dividend per Share (Original Currency)',
-                        f'Dividend per Share ({base_currency})',
-                        f'Dividend Income ({base_currency})'
+                    dividends = dividends.reset_index(drop=True)
+                    dividends = dividends.rename(
+                        columns={'Dividends': 'Dividend per Share (Original Currency)'}
+                    )
+
+                    # Convert dividends to base currency
+                    dividends[['Original Currency', f'Dividend per Share ({base_currency})']] = dividends.apply(
+                        lambda x: helper.convert_dividends(x, base_currency, DF_INVESTMENTS),
+                        axis=1,
+                        result_type='expand'
+                    )
+
+                    # Calculate income from dividends
+                    dividends[f'Dividend Income ({base_currency})'] = dividends[f'Dividend per Share ({base_currency})'] * dividends['Shares to Date']
+                    dividends[f'Dividend Income ({base_currency})'] = dividends[f'Dividend Income ({base_currency})'].round(2)
+                    dividends = dividends[
+                        [
+                            'Date',
+                            'Symbol',
+                            'Shares to Date',
+                            'Dividend per Share (Original Currency)',
+                            f'Dividend per Share ({base_currency})',
+                            f'Dividend Income ({base_currency})'
+                        ]
                     ]
-                ]
 
-                st.dataframe(dividends, use_container_width=True)
+                    st.dataframe(dividends)

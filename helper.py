@@ -4,8 +4,6 @@ import datetime
 from dateutil.relativedelta import relativedelta
 from currency_converter import CurrencyConverter
 
-today = datetime.datetime.now()
-
 curr_conv = CurrencyConverter(
     fallback_on_missing_rate=True,
     fallback_on_wrong_date=True
@@ -90,10 +88,10 @@ def calculate_development_metric(metric, df_development, base_currency):
     # or the investment started after Jan 1st, then we can just use the
     # last values of the DataFrame without doing further calculations
     min_date = df_development['Date'].min()
-    january_1st = datetime.date(day=1, month=1, year=today.year)
-    is_min_date_after_january_1st = min_date > january_1st
+    max_date = df_development['Date'].max()
+    january_1st = datetime.date(day=1, month=1, year=max_date.year)
 
-    if metric == 'MAX' or (metric == 'YTD' and is_min_date_after_january_1st):
+    if metric == 'MAX' or (metric == 'YTD' and min_date > january_1st):
         gain = df_development[f'Unrealised Gain/Loss to Date ({base_currency})'].iloc[-1]
         pct_change = df_development['Percentage Return'].iloc[-1]
 
@@ -101,13 +99,13 @@ def calculate_development_metric(metric, df_development, base_currency):
 
         # Calculate last date
         last_dates = {
-            '1D': (today - relativedelta(days=1)).date(),
-            '1W': (today - relativedelta(weeks=1)).date(),
-            '1M': (today - relativedelta(months=1)).date(),
-            '6M': (today - relativedelta(months=6)).date(),
+            '1D': max_date - relativedelta(days=1),
+            '1W': max_date - relativedelta(weeks=1),
+            '1M': max_date - relativedelta(months=1),
+            '6M': max_date - relativedelta(months=6),
             'YTD': january_1st,
-            '1Y': (today - relativedelta(years=1)).date(),
-            '5Y': (today - relativedelta(years=5)).date()
+            '1Y': max_date - relativedelta(years=1),
+            '5Y': max_date - relativedelta(years=5)
         }
 
         last_date = last_dates[metric]
