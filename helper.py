@@ -76,7 +76,7 @@ def calculate_development_metric(metric, df_development, base_currency):
 
     :param metric: One of 1D, 1W, 1M, 6M, YTD, 1Y, 5Y, MAX
     :type metric: str
-    :param df_development: DataFrame with daily security development
+    :param df_development: DataFrame with overall daily security development
     :type df_development: pandas.DataFrame
     :param base_currency: Currency in which to invest
     :type base_currency: str
@@ -86,35 +86,47 @@ def calculate_development_metric(metric, df_development, base_currency):
     :rtype: int
     """
 
+    # If the development to track is that of the whole investment period
+    # or the investment started after Jan 1st, then we can just use the
+    # last values of the DataFrame without doing further calculations
     min_date = df_development['Date'].min()
+    january_1st = datetime.date(day=1, month=1, year=today.year)
+    is_min_date_after_january_1st = min_date > january_1st
 
-    last_dates = {
-        '1D': (today - relativedelta(days=1)).date(),
-        '1W': (today - relativedelta(weeks=1)).date(),
-        '1M': (today - relativedelta(months=1)).date(),
-        '6M': (today - relativedelta(months=6)).date(),
-        'YTD': max(datetime.date(day=1, month=1, year=today.year), min_date),
-        '1Y': (today - relativedelta(years=1)).date(),
-        '5Y': (today - relativedelta(years=5)).date(),
-        'MAX': min_date
-    }
+    if metric == 'MAX' or (metric == 'YTD' and is_min_date_after_january_1st):
+        gain = df_development[f'Unrealised Gain/Loss to Date ({base_currency})'].iloc[-1]
+        pct_change = df_development['Percentage Return'].iloc[-1]
 
-    last_date = last_dates[metric]
-    df_before_date = df_development.loc[df_development['Date'] <= last_date]
-    if len(df_before_date) == 0:
-        return '-', '-'
+    else:
 
-    last_date_gain = df_before_date[f'Unrealised Gain/Loss to Date ({base_currency})'].iloc[-1]
-    newest_gain = df_development[f'Unrealised Gain/Loss to Date ({base_currency})'].iloc[-1]
+        # Calculate last date
+        last_dates = {
+            '1D': (today - relativedelta(days=1)).date(),
+            '1W': (today - relativedelta(weeks=1)).date(),
+            '1M': (today - relativedelta(months=1)).date(),
+            '6M': (today - relativedelta(months=6)).date(),
+            'YTD': january_1st,
+            '1Y': (today - relativedelta(years=1)).date(),
+            '5Y': (today - relativedelta(years=5)).date()
+        }
 
-    last_date_profit = df_before_date['Percentage Return'].iloc[-1]
-    newest_profit = df_development['Percentage Return'].iloc[-1]
+        last_date = last_dates[metric]
+        df_before_date = df_development.loc[df_development['Date'] <= last_date]
+        if len(df_before_date) == 0:    # If no investments that long ago
+            return '-', '-'
 
-    gain_or_loss_change = newest_gain - last_date_gain
-    pct_change = newest_profit - last_date_profit
-    gain_or_loss_change = f'{'+' if gain_or_loss_change >= 0 else ''}{gain_or_loss_change:.2f}'
+        gain_before = df_before_date[f'Unrealised Gain/Loss to Date ({base_currency})'].iloc[-1]
+        gain_now = df_development[f'Unrealised Gain/Loss to Date ({base_currency})'].iloc[-1]
+        gain = gain_now - gain_before
 
-    return gain_or_loss_change, f'{pct_change:.2f}%'
+        pct_before = df_before_date['Percentage Return'].iloc[-1]
+        pct_now = df_development['Percentage Return'].iloc[-1]
+        pct_change = pct_now - pct_before
+
+    gain = f'{'+' if gain >= 0 else ''}{gain:.2f}'
+    pct_change = f'{pct_change:.2f}%'
+
+    return gain, pct_change
 
 def convert_dividends(row, base_currency, df_investments):
     """
