@@ -93,7 +93,7 @@ def calculate_development_metric(metric, df_development, base_currency):
 
     if metric == 'MAX' or (metric == 'YTD' and min_date > january_1st):
         gain = df_development[f'Unrealised Gain/Loss to Date ({base_currency})'].iloc[-1]
-        pct_change = df_development['Percentage Return'].iloc[-1]
+        pct_change = df_development['Return on Investment (%)'].iloc[-1]
 
     else:
 
@@ -117,8 +117,8 @@ def calculate_development_metric(metric, df_development, base_currency):
         gain_now = df_development[f'Unrealised Gain/Loss to Date ({base_currency})'].iloc[-1]
         gain = gain_now - gain_before
 
-        pct_before = df_before_date['Percentage Return'].iloc[-1]
-        pct_now = df_development['Percentage Return'].iloc[-1]
+        pct_before = df_before_date['Return on Investment (%)'].iloc[-1]
+        pct_now = df_development['Return on Investment (%)'].iloc[-1]
         pct_change = pct_now - pct_before
 
     gain = f'{'+' if gain >= 0 else ''}{gain:.2f}'

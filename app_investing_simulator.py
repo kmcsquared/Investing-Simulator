@@ -12,13 +12,13 @@ st.title('Investing Simulator (Dollar-Cost Averaging)')
 st.write(
     '''
     - This app allows you to simulate how your investments would have performed over time 
-    if you had invested on a monthly basis, inspired by the [dollar-cost averaging](
+    if you had invested on a periodic basis, inspired by the [dollar-cost averaging](
     https://www.investopedia.com/terms/d/dollarcostaveraging.asp) strategy.
 
     - The simulation assumes that it is possible to buy fractional shares
     and that there are no currency exchange fees.
 
-    - If the scheduled investment happens to be on a day when the market 
+    - If the scheduled investment happens on a day when the stock market 
     is closed, the buy order will be executed in the next market opening.
     
     - Orders are executed at market open by default and are compared against
@@ -27,8 +27,9 @@ st.write(
 )
 
 today = datetime.datetime.now()
+currencies = sorted(helper.curr_conv.currencies)
 
-st.header('Choose your investment strategy')
+st.header('Choose your investment strategy', divider='rainbow')
 # Ask user to decide investment date range, as well as frequency and amount for investing
 with st.form('input_investment_parameters'):
 
@@ -61,8 +62,8 @@ with st.form('input_investment_parameters'):
     with col_input_4:
         base_currency = st.selectbox(
             label='Select your base currency.',
-            options=sorted(helper.curr_conv.currencies),
-            index=sorted(helper.curr_conv.currencies).index('USD'),
+            options=currencies,
+            index=currencies.index('USD'),
             help='''
             If the security is traded in a currency that is not your base currency, 
             a currency exchange will occur.
@@ -74,7 +75,8 @@ with st.form('input_investment_parameters'):
         help='''
         A ticker symbol or stock symbol is an abbreviation used to uniquely identify publicly 
         traded shares of a particular stock or security on a particular stock exchange. 
-        You can find these symbols at [YahooFinance](https://finance.yahoo.com/quote/AAPL/). 
+        You can find these symbols at [YahooFinance](https://finance.yahoo.com),
+        for example. 
 
         (Examples) Symbol - Company:
 
@@ -291,7 +293,7 @@ if st.session_state['submitted']:
                         st.write(f'{i+1}. {security}')
 
                 # Create monthly investments DataFrame from rows
-                DF_INVESTMENTS = pd.DataFrame(
+                df_investments = pd.DataFrame(
                     data=rows,
                     columns=[
                         'Purchase Date',
@@ -308,26 +310,28 @@ if st.session_state['submitted']:
                 # When investing daily and meeting a closed market date,
                 # the simulation would invest twice in the next open date
                 if investment_frequency == 'Daily':
-                    DF_INVESTMENTS = DF_INVESTMENTS.drop_duplicates(['Purchase Date', 'Symbol'])
+                    df_investments.drop_duplicates(['Purchase Date', 'Symbol'], inplace=True)
 
                 # Convert to datetime.date
-                DF_INVESTMENTS['Purchase Date'] = pd.to_datetime(DF_INVESTMENTS['Purchase Date'])
-                DF_INVESTMENTS['Purchase Date'] = DF_INVESTMENTS['Purchase Date'].dt.date
+                df_investments['Purchase Date'] = pd.to_datetime(df_investments['Purchase Date']).dt.date
+                df_investments.sort_values(['Purchase Date', 'Symbol'], inplace=True)
+                df_investments.reset_index(drop=True, inplace=True)
 
-                st.header('Transactions')
+                st.header('Transactions', divider='rainbow')
                 st.write('Your periodic investments are shown below.')
-                st.dataframe(DF_INVESTMENTS, use_container_width=True)
+                df_investments.index += 1
+                st.dataframe(df_investments, use_container_width=True)
 
-                # Find current investment value
+                #################### FIND INVESTMENT VALUE ####################
                 # Generate key for correct yfinance data retrieval
-                DF_INVESTMENTS['Key'] = DF_INVESTMENTS['Symbol'] + f'//{date_start}//{date_end}//{investment_frequency}//{investment_amount}'
+                df_investments['Key'] = df_investments['Symbol'] + f'//{date_start}//{date_end}//{investment_frequency}//{investment_amount}'
                 # Match values from dictionary to DataFrame row values and add data to that row
-                DF_INVESTMENTS['Current Share Price (Original Currency)'] = DF_INVESTMENTS['Key'].apply(
+                df_investments['Current Share Price (Original Currency)'] = df_investments['Key'].apply(
                     lambda x: round(dfs_downloads[x]['Close'].iloc[-1], 2)
                 )
 
                 # Convert share price
-                DF_INVESTMENTS[f'Current Share Price ({base_currency})'] = DF_INVESTMENTS.apply(
+                df_investments[f'Current Share Price ({base_currency})'] = df_investments.apply(
                     lambda row: round(
                         helper.curr_conv.convert(
                             amount=row['Current Share Price (Original Currency)'],
@@ -341,17 +345,19 @@ if st.session_state['submitted']:
                 )
 
                 # Calculate for each day within date range
-                DF_INVESTMENTS[f'Current Investment Value ({base_currency})'] = DF_INVESTMENTS['Shares Bought'] * DF_INVESTMENTS[f'Current Share Price ({base_currency})']
-                DF_INVESTMENTS[f'Unrealised Gain/Loss ({base_currency})'] = DF_INVESTMENTS[f'Current Investment Value ({base_currency})'] - investment_amount
-                DF_INVESTMENTS['Percentage Return'] = (DF_INVESTMENTS[f'Unrealised Gain/Loss ({base_currency})'] / investment_amount) * 100
+                df_investments[f'Current Investment Value ({base_currency})'] = df_investments['Shares Bought'] * df_investments[f'Current Share Price ({base_currency})']
+                df_investments[f'Unrealised Gain/Loss ({base_currency})'] = df_investments[f'Current Investment Value ({base_currency})'] - investment_amount
+                df_investments['Return on Investment (%)'] = (df_investments[f'Unrealised Gain/Loss ({base_currency})'] / investment_amount) * 100
 
-                st.header('Development')
+                st.header('Development', divider='rainbow')
 
                 st.write(
                     '''
-                    - The metrics below show the overall gain (or loss) of the scheduled
-                    investements over a time period, as well as the difference in 
-                    percentage return of the investment value since then.
+                    - The metrics below show the overall [unrealised gain (or loss)](
+                    https://www.investopedia.com/ask/answers/04/021204.asp) of the
+                    scheduled investements over a time period, as well as the
+                    difference in [return on investment (ROI)](
+                    https://www.investopedia.com/terms/r/returnoninvestment.asp) since then.
 
                     - You can click on the legend to show/hide each symbol.
                     '''
@@ -359,9 +365,10 @@ if st.session_state['submitted']:
 
                 # Put together historical data for each symbol
                 df_development_list = []
-
-                for key, data in dfs_downloads.items():
-                    symbol = key.split('//')[0]
+                correct_key_suffix = f'//{date_start}//{date_end}//{investment_frequency}//{investment_amount}'
+                for symbol in symbols:
+                    correct_key = symbol + correct_key_suffix
+                    data = dfs_downloads[correct_key].copy()
                     data['Symbol'] = symbol
                     data = data[['Symbol', 'Close', 'Dividends']]
                     df_development_list.append(data)
@@ -377,11 +384,11 @@ if st.session_state['submitted']:
                     f'Invested Capital to Date ({base_currency})',
                     f'Investment Value to Date ({base_currency})',
                     f'Unrealised Gain/Loss to Date ({base_currency})',
-                    'Percentage Return'
+                    'Return on Investment (%)'
                 ]
 
                 df_development[cols_to_date] = df_development.apply(
-                    lambda row: helper.get_values_to_date(row, DF_INVESTMENTS, base_currency),
+                    lambda row: helper.get_values_to_date(row, df_investments, base_currency),
                     axis=1,
                     result_type='expand'
                 )
@@ -396,8 +403,8 @@ if st.session_state['submitted']:
                 cols_agg = [f'{col} to Date ({base_currency})' for col in cols_agg]
                 df_grouped = df_all_symbols_per_date.groupby('Date')[cols_agg].sum()
                 df_grouped = df_grouped.reset_index()
-                df_grouped['Percentage Return'] = (df_grouped[f'Unrealised Gain/Loss to Date ({base_currency})'] / df_grouped[f'Invested Capital to Date ({base_currency})']) * 100
-                df_grouped['Percentage Return'] = df_grouped['Percentage Return'].round(2)
+                df_grouped['Return on Investment (%)'] = (df_grouped[f'Unrealised Gain/Loss to Date ({base_currency})'] / df_grouped[f'Invested Capital to Date ({base_currency})']) * 100
+                df_grouped['Return on Investment (%)'] = df_grouped['Return on Investment (%)'].round(2)
                 df_grouped['Symbol'] = '--OVERALL--'
 
                 # Display period performance metrics
@@ -420,17 +427,19 @@ if st.session_state['submitted']:
                             delta_color='off' if metric_pct_change == '-' else 'normal'
                         )
 
+                # Add overall performance to development data
                 df_development_plot = pd.concat([df_development, df_grouped], ignore_index=True)
                 df_development_plot = df_development_plot.sort_values(['Date', 'Symbol'])
                 df_development_plot = df_development_plot.reset_index(drop=True)
                 # Round numbers to 2 decimal figures
                 df_development_plot[f'Unrealised Gain/Loss to Date ({base_currency})'] = df_development_plot[f'Unrealised Gain/Loss to Date ({base_currency})'].round(2)
                 df_development_plot[f'Investment Value to Date ({base_currency})'] = df_development_plot[f'Investment Value to Date ({base_currency})'].round(2)
+                # df_development_plot.index += 1
                 # st.dataframe(df_development_plot, use_container_width=True)
 
-                # Plot gain/loss and percentage return in separate tabs
+                # Plot gain/loss and return on investment in separate tabs
                 tab_gain_loss, tab_pct_return = st.tabs(
-                    ['Unrealised Gain/Loss', 'Percentage Return']
+                    ['Unrealised Gain/Loss', 'Return on Investment (%)']
                 )
 
                 with tab_gain_loss:
@@ -441,35 +450,42 @@ if st.session_state['submitted']:
                         color='Symbol',
                     )
 
+                    # Show hover-data together: https://plotly.com/python/hover-text-and-formatting/
+                    # Change y-axis format: https://plotly.com/python/tick-formatting/
                     fig_gain_loss.update_traces(hovertemplate=None)
                     fig_gain_loss.update_layout(
                         yaxis_title=f'Unrealised Gain/Loss ({base_currency})',
-                        hovermode='x unified'
+                        hovermode='x unified',
+                        yaxis_tickformat=','
                     )
 
                     st.plotly_chart(fig_gain_loss)
 
                 with tab_pct_return:
 
+                    df_development_plot['Return on Investment (%)'] /= 100
+
                     fig_pct_return = px.line(
                         df_development_plot,
                         x='Date',
-                        y='Percentage Return',
+                        y='Return on Investment (%)',
                         color='Symbol',
                     )
 
                     fig_pct_return.update_traces(hovertemplate=None)
                     fig_pct_return.update_layout(
-                        hovermode='x unified'
+                        hovermode='x unified',
+                        yaxis_tickformat='.0%',
+                        yaxis_title = 'Return on Investment'
                     )
 
-                    # Select only overall performance by default
+                    # Show only overall performance line initially
                     # https://stackoverflow.com/questions/74322004/how-to-have-one-item-in-the-legend-selected-by-default-in-plotly-dash
                     fig_pct_return.update_traces(visible='legendonly')
                     fig_pct_return.data[0].visible = True
-                    st.plotly_chart(fig_pct_return)
+                    st.plotly_chart(fig_pct_return, use_container_width=True)
 
-                st.header('Portfolio Distribution')
+                st.header('Portfolio Distribution', divider='rainbow')
 
                 # Slider to update pie chart over time
                 date_slider = st.slider(
@@ -482,6 +498,8 @@ if st.session_state['submitted']:
                 # Get values up until slider date
                 df_pie = df_all_symbols_per_date.copy()
                 df_pie = df_pie.loc[df_pie['Date'] <= date_slider]
+                # Only the last values for each security are needed
+                df_pie = df_pie.iloc[-NUM_SECURITIES_INVESTED:]
 
                 # Plot invested capital and actual value in separate columns
                 colums_pie_streamlit = st.columns(2)
@@ -490,29 +508,34 @@ if st.session_state['submitted']:
                     f'Investment Value to Date ({base_currency})',
                 ]
 
+                # Return on investment values
+                invested_capital = df_pie[cols_pie[0]].sum()
+                investment_value = df_pie[cols_pie[1]].sum()
+                roi = (investment_value - invested_capital) / invested_capital
+                roi = roi * 100
+
                 # Get last values for each security, add them together
                 # and plot the pie chart
                 for idx, col_df in enumerate(cols_pie):
-                    total_amount = df_pie[col_df].iloc[-NUM_SECURITIES_INVESTED:].sum()
+                    total_amount = df_pie[col_df].sum()
                     # Capital as int, value as float
                     total_amount = round(total_amount) if idx == 0 else round(total_amount, 2)
 
                     if col_df == f'Investment Value to Date ({base_currency})':
-                        DELTA = df_pie['Percentage Return'].iloc[-NUM_SECURITIES_INVESTED:].mean()
-                        DELTA = f'{DELTA:.2f}%'
+                        DELTA = f'{roi:.2f}%'
                     else:
                         DELTA = None
 
                     with colums_pie_streamlit[idx]:
                         st.metric(label=col_df, value=total_amount, delta=DELTA)
                         fig_pie = px.pie(
-                            df_pie.iloc[-NUM_SECURITIES_INVESTED:],
+                            df_pie,
                             values=col_df,
                             names='Symbol'
                         )
                         st.plotly_chart(fig_pie)
 
-                st.header('Dividends')
+                st.header('Dividends', divider='rainbow')
 
                 # Get dividends
                 is_dividend = df_development['Dividends'] != 0
@@ -534,7 +557,7 @@ if st.session_state['submitted']:
 
                     # Convert dividends to base currency
                     dividends[['Original Currency', f'Dividend per Share ({base_currency})']] = dividends.apply(
-                        lambda x: helper.convert_dividends(x, base_currency, DF_INVESTMENTS),
+                        lambda x: helper.convert_dividends(x, base_currency, df_investments),
                         axis=1,
                         result_type='expand'
                     )
@@ -553,4 +576,21 @@ if st.session_state['submitted']:
                         ]
                     ]
 
-                    st.dataframe(dividends)
+                    dividends.index += 1
+                    st.dataframe(dividends, use_container_width=True)
+
+                    fig_dividends = px.bar(
+                        data_frame=dividends,
+                        x='Symbol',
+                        y=f'Dividend Income ({base_currency})',
+                        hover_data=['Date', 'Symbol', f'Dividend Income ({base_currency})']
+                    )
+
+                    st.plotly_chart(fig_dividends)
+
+                st.header('DCA vs Lump Sum')
+                # TODO: Compare DCA performance against investing all in one go from date_start
+
+                st.header('Investing vs Inflation')
+                # TODO: Compare DCA performance against not investing
+                # Use https://pypi.org/project/cpi/ to calculate inflation
