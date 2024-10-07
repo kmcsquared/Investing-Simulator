@@ -1,6 +1,7 @@
 """Helper functions for investing simulator Streamlit app"""
 
 import datetime
+import cpi
 from dateutil.relativedelta import relativedelta
 from currency_converter import CurrencyConverter
 
@@ -147,3 +148,39 @@ def convert_dividends(row, base_currency, df_investments):
     )
 
     return original_currency, dividend_converted
+
+def get_monthly_inflation_adjusted_buying_power(df_inflation):
+    """
+    Calculate the inflated buying power for each month.
+
+    :param df_inflation: DataFrame containing lump sum development
+    :type df_inflation: pd.DataFrame
+    :return: Dictionary of adjusted buying power per month
+    :rtype: dict
+    """
+
+    buying_power_by_month = {}
+    df_inflation = df_inflation.copy()
+    invested_capital = df_inflation['Invested Capital to Date (USD)'].iloc[0]
+    first_date = df_inflation['Date'].min()
+    # Change date to first day of month
+    inflation_date = datetime.date(
+        day=1,
+        month=first_date.month,
+        year=first_date.year
+    )
+
+    while inflation_date <= df_inflation['Date'].max():
+
+        # Get future price of items for current price
+        future_price = cpi.inflate(
+            value=invested_capital,
+            year_or_month=min(first_date, cpi.LATEST_MONTH),
+            to=min(inflation_date, cpi.LATEST_MONTH)
+        )
+
+        buying_power = invested_capital * (invested_capital/future_price)
+        buying_power_by_month[inflation_date] = buying_power
+        inflation_date += relativedelta(months=1)
+
+    return buying_power_by_month

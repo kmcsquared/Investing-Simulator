@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 import plotly.express as px
+import cpi
 import helper
 
 st.set_page_config(layout='wide')
@@ -172,8 +173,7 @@ if st.session_state['submitted']:
                             tickers=symbol,
                             start=date_start,
                             end=date_end,
-                            actions=True,
-                            rounding=True
+                            actions=True
                         )
 
                         # If no data was found for symbol
@@ -248,9 +248,9 @@ if st.session_state['submitted']:
                     row.append(tickers[symbol].info['quoteType'])
                     row.append(currency_security)
                     row.append(num_shares_bought)
-                    row.append(round(buy_price_original, 2))
-                    row.append(round(buy_price_converted, 2))
-                    row.append(round(investment_amount, 2))
+                    row.append(buy_price_original)
+                    row.append(buy_price_converted)
+                    row.append(investment_amount)
                     rows.append(row)
 
                 # Once the investment date is covered for
@@ -320,26 +320,26 @@ if st.session_state['submitted']:
                 st.header('Transactions', divider='rainbow')
                 st.write('Your periodic investments are shown below.')
                 df_investments.index += 1
-                st.dataframe(df_investments, use_container_width=True)
+                df_investments_show = df_investments.copy()
+                for col in ['Share Price at Purchase (Original Currency)', f'Share Price at Purchase ({base_currency})']:
+                    df_investments_show[col] = df_investments_show[col].round(2)
+                st.dataframe(df_investments_show, use_container_width=True)
 
                 #################### FIND INVESTMENT VALUE ####################
                 # Generate key for correct yfinance data retrieval
                 df_investments['Key'] = df_investments['Symbol'] + f'//{date_start}//{date_end}//{investment_frequency}//{investment_amount}'
                 # Match values from dictionary to DataFrame row values and add data to that row
                 df_investments['Current Share Price (Original Currency)'] = df_investments['Key'].apply(
-                    lambda x: round(dfs_downloads[x]['Close'].iloc[-1], 2)
+                    lambda x: dfs_downloads[x]['Close'].iloc[-1]
                 )
 
                 # Convert share price
                 df_investments[f'Current Share Price ({base_currency})'] = df_investments.apply(
-                    lambda row: round(
-                        helper.curr_conv.convert(
-                            amount=row['Current Share Price (Original Currency)'],
-                            currency=row['Original Currency'],
-                            new_currency=base_currency,
-                            date=date_end
-                        ),
-                        2
+                    lambda row: helper.curr_conv.convert(
+                        amount=row['Current Share Price (Original Currency)'],
+                        currency=row['Original Currency'],
+                        new_currency=base_currency,
+                        date=date_end
                     ),
                     axis=1
                 )
@@ -370,7 +370,7 @@ if st.session_state['submitted']:
                     correct_key = symbol + correct_key_suffix
                     data = dfs_downloads[correct_key].copy()
                     data['Symbol'] = symbol
-                    data = data[['Symbol', 'Close', 'Dividends']]
+                    data = data[['Symbol', 'Open', 'Close', 'Dividends']]
                     df_development_list.append(data)
 
                 # Combine all DataFrames into a single DataFrame
@@ -404,7 +404,6 @@ if st.session_state['submitted']:
                 df_grouped = df_all_symbols_per_date.groupby('Date')[cols_agg].sum()
                 df_grouped = df_grouped.reset_index()
                 df_grouped['Return on Investment (%)'] = (df_grouped[f'Unrealised Gain/Loss to Date ({base_currency})'] / df_grouped[f'Invested Capital to Date ({base_currency})']) * 100
-                df_grouped['Return on Investment (%)'] = df_grouped['Return on Investment (%)'].round(2)
                 df_grouped['Symbol'] = '--OVERALL--'
 
                 # Display period performance metrics
@@ -431,15 +430,12 @@ if st.session_state['submitted']:
                 df_development_plot = pd.concat([df_development, df_grouped], ignore_index=True)
                 df_development_plot = df_development_plot.sort_values(['Date', 'Symbol'])
                 df_development_plot = df_development_plot.reset_index(drop=True)
-                # Round numbers to 2 decimal figures
-                df_development_plot[f'Unrealised Gain/Loss to Date ({base_currency})'] = df_development_plot[f'Unrealised Gain/Loss to Date ({base_currency})'].round(2)
-                df_development_plot[f'Investment Value to Date ({base_currency})'] = df_development_plot[f'Investment Value to Date ({base_currency})'].round(2)
                 # df_development_plot.index += 1
                 # st.dataframe(df_development_plot, use_container_width=True)
 
                 # Plot gain/loss and return on investment in separate tabs
                 tab_gain_loss, tab_pct_return = st.tabs(
-                    ['Unrealised Gain/Loss', 'Return on Investment (%)']
+                    ['Unrealised Gain/Loss', 'Return on Investment']
                 )
 
                 with tab_gain_loss:
@@ -447,7 +443,7 @@ if st.session_state['submitted']:
                         df_development_plot,
                         x='Date',
                         y=f'Unrealised Gain/Loss to Date ({base_currency})',
-                        color='Symbol',
+                        color='Symbol'
                     )
 
                     # Show hover-data together: https://plotly.com/python/hover-text-and-formatting/
@@ -463,12 +459,12 @@ if st.session_state['submitted']:
 
                 with tab_pct_return:
 
-                    df_development_plot['Return on Investment (%)'] /= 100
+                    df_development_plot['Return on Investment'] = df_development_plot['Return on Investment (%)'] / 100
 
                     fig_pct_return = px.line(
                         df_development_plot,
                         x='Date',
-                        y='Return on Investment (%)',
+                        y='Return on Investment',
                         color='Symbol',
                     )
 
@@ -476,14 +472,18 @@ if st.session_state['submitted']:
                     fig_pct_return.update_layout(
                         hovermode='x unified',
                         yaxis_tickformat='.0%',
-                        yaxis_title = 'Return on Investment'
                     )
 
                     # Show only overall performance line initially
                     # https://stackoverflow.com/questions/74322004/how-to-have-one-item-in-the-legend-selected-by-default-in-plotly-dash
                     fig_pct_return.update_traces(visible='legendonly')
-                    fig_pct_return.data[0].visible = True
+                    for idx, data in enumerate(fig_pct_return.data):
+                        if data['name'] == '--OVERALL--':
+                            fig_pct_return.data[idx].visible = True
+                            break
+
                     st.plotly_chart(fig_pct_return, use_container_width=True)
+                    df_development_plot = df_development_plot.drop('Return on Investment', axis=1)
 
                 st.header('Portfolio Distribution', divider='rainbow')
 
@@ -512,7 +512,7 @@ if st.session_state['submitted']:
                 invested_capital = df_pie[cols_pie[0]].sum()
                 investment_value = df_pie[cols_pie[1]].sum()
                 roi = (investment_value - invested_capital) / invested_capital
-                roi = roi * 100
+                roi *= 100
 
                 # Get last values for each security, add them together
                 # and plot the pie chart
@@ -576,9 +576,11 @@ if st.session_state['submitted']:
                         ]
                     ]
 
+                    # Show dividends over time
                     dividends.index += 1
                     st.dataframe(dividends, use_container_width=True)
 
+                    # Plot dividend income by symbol
                     fig_dividends = px.bar(
                         data_frame=dividends,
                         x='Symbol',
@@ -588,9 +590,152 @@ if st.session_state['submitted']:
 
                     st.plotly_chart(fig_dividends)
 
-                st.header('DCA vs Lump Sum')
-                # TODO: Compare DCA performance against investing all in one go from date_start
+                st.header('DCA vs Lump Sum vs Inflation', divider='rainbow')
+                cols_of_interest = ['Date', 'Invested Capital to Date (USD)', 'Unrealised Gain/Loss to Date (USD)', 'Return on Investment (%)']
+                # Compare DCA performance vs lump sum vs inflation
+                # Use https://pypi.org/project/cpi/ for inflation
+                # Convert everything to dollars since cpi is USD based
 
-                st.header('Investing vs Inflation')
-                # TODO: Compare DCA performance against not investing
-                # Use https://pypi.org/project/cpi/ to calculate inflation
+                # Check https://github.com/TariqAHassan/EasyMoney and
+                # https://medium.com/@lucamingarelli/easy-access-to-ecb-data-in-python-6015b65dcc0efor EUR based
+
+                tab_dca_gain_loss, tab_dca_return = st.tabs(
+                    ['Unrealised Gain/Loss', 'Return on Investment']
+                )
+
+                # DCA
+                df_dca = df_development_plot.loc[df_development_plot['Symbol'] == '--OVERALL--'].copy()
+                df_dca['Method'] = 'DCA'
+                st.dataframe(
+                    df_dca[cols_of_interest],
+                    use_container_width=True
+                )
+
+                # Lump Sum
+                lump_sum = df_dca[f'Invested Capital to Date ({base_currency})'].iloc[-1]
+                lump_sum_per_security = lump_sum / NUM_SECURITIES_INVESTED
+                df_lump_sum = df_development[['Date', 'Symbol', 'Open', 'Close']].copy()
+                df_lump_sum['Method'] = 'Lump Sum'
+                data_lump_sum = []  # Store DataFrames for development of each symbol to then concat
+                for symbol in df_lump_sum['Symbol'].unique():
+                    data = df_lump_sum.loc[df_lump_sum['Symbol'] == symbol].copy()
+                    data['Shares to Date'] = lump_sum_per_security / data['Open'].iloc[0]
+                    data[f'Invested Capital to Date ({base_currency})'] = lump_sum_per_security
+                    data[f'Investment Value to Date ({base_currency})'] = data['Shares to Date'] * data['Close']
+                    data[f'Unrealised Gain/Loss to Date ({base_currency})'] = data[f'Investment Value to Date ({base_currency})'] - lump_sum_per_security
+                    data_lump_sum.append(data)
+
+                df_lump_sum = pd.concat(data_lump_sum, ignore_index=True)
+                df_lump_sum = df_lump_sum.sort_values(['Date', 'Symbol']).reset_index(drop=True)
+
+                # Keep only dates where all symbols have data
+                counts = df_lump_sum['Date'].value_counts()
+                dates_with_all_symbols = counts.index[counts.eq(NUM_SECURITIES_INVESTED)]
+                dates_with_all_symbols = df_lump_sum['Date'].isin(dates_with_all_symbols)
+                df_all_symbols_per_date = df_lump_sum.loc[dates_with_all_symbols].copy()
+                # Aggregate symbols by date
+                cols_agg = ['Invested Capital', 'Investment Value', 'Unrealised Gain/Loss']
+                cols_agg = [f'{col} to Date ({base_currency})' for col in cols_agg]
+                df_lump_sum = df_all_symbols_per_date.groupby('Date')[cols_agg].sum()
+                df_lump_sum = df_lump_sum.reset_index()
+                df_lump_sum['Return on Investment (%)'] = (df_lump_sum[f'Unrealised Gain/Loss to Date ({base_currency})'] / df_lump_sum[f'Invested Capital to Date ({base_currency})']) * 100
+                df_lump_sum['Symbol'] = '--OVERALL--'
+                st.dataframe(df_lump_sum[cols_of_interest], use_container_width=True)
+
+                # Inflation
+                # Reuse lump sum columns
+                df_inflation = df_lump_sum.copy()
+
+                if base_currency != 'USD':
+                    df_inflation['Invested Capital to Date (USD)'] = df_lump_sum.apply(
+                        lambda row: helper.curr_conv.convert(
+                            amount=row[f'Invested Capital to Date ({base_currency})'],
+                            currency=base_currency,
+                            new_currency='USD',
+                            date=row['Date']
+                        ),
+                        axis=1
+                    )
+
+                inflation_key = f'inflation//{'//'.join(sorted(symbols))}{correct_key_suffix}'
+                if inflation_key not in st.session_state:
+                    buying_power_by_month = helper.get_monthly_inflation_adjusted_buying_power(df_inflation)
+                    st.session_state[inflation_key] = buying_power_by_month
+
+                # Adjusted buying power nicknamed as investment value
+                df_inflation['Investment Value to Date (USD)'] = df_inflation.apply(
+                    lambda row: st.session_state[inflation_key][
+                        datetime.date(
+                            day=1,
+                            month=row['Date'].month,
+                            year=row['Date'].year
+                        )
+                    ],
+                    axis=1
+                )
+
+                df_inflation['Unrealised Gain/Loss to Date (USD)'] = df_inflation['Investment Value to Date (USD)'] - df_inflation['Invested Capital to Date (USD)']
+                df_inflation['Return on Investment (%)'] = 100 * (df_inflation['Unrealised Gain/Loss to Date (USD)'] / df_inflation['Invested Capital to Date (USD)'])
+                st.dataframe(df_inflation[cols_of_interest], use_container_width=True)
+
+                with tab_dca_gain_loss:
+
+                    fig_dca_vs_lump_sum_gain_loss = px.line()
+
+                    fig_dca_vs_lump_sum_gain_loss.add_scatter(
+                        name='DCA',
+                        x=df_dca['Date'],
+                        y=df_dca['Unrealised Gain/Loss to Date (USD)']
+                    )
+
+                    fig_dca_vs_lump_sum_gain_loss.add_scatter(
+                        name='Lump Sum',
+                        x=df_lump_sum['Date'],
+                        y=df_lump_sum['Unrealised Gain/Loss to Date (USD)'].round(2)
+                    )
+
+                    fig_dca_vs_lump_sum_gain_loss.add_scatter(
+                        name='Adjusted Buying Power (after Inflation)',
+                        x=df_inflation['Date'],
+                        y=df_inflation['Unrealised Gain/Loss to Date (USD)'].round(2)
+                    )
+
+                    fig_dca_vs_lump_sum_gain_loss.update_traces(hovertemplate=None)
+                    fig_dca_vs_lump_sum_gain_loss.update_layout(
+                        yaxis_title='Unrealised Gain/Loss (USD)',
+                        hovermode='x unified',
+                        yaxis_tickformat=','
+                    )
+
+                    st.plotly_chart(fig_dca_vs_lump_sum_gain_loss, use_container_width=True)
+
+                with tab_dca_return:
+
+                    fig_dca_vs_lump_sum_return = px.line()
+
+                    fig_dca_vs_lump_sum_return.add_scatter(
+                        name='DCA',
+                        x=df_dca['Date'],
+                        y=df_dca['Return on Investment (%)'] / 100
+                    )
+
+                    fig_dca_vs_lump_sum_return.add_scatter(
+                        name='Lump Sum',
+                        x=df_lump_sum['Date'],
+                        y=df_lump_sum['Return on Investment (%)'] / 100
+                    )
+
+                    fig_dca_vs_lump_sum_return.add_scatter(
+                        name='Adjusted Buying Power (after Inflation)',
+                        x=df_inflation['Date'],
+                        y=df_inflation['Return on Investment (%)'] / 100
+                    )
+
+                    fig_dca_vs_lump_sum_return.update_traces(hovertemplate=None)
+                    fig_dca_vs_lump_sum_return.update_layout(
+                        yaxis_title='Return on Investment',
+                        hovermode='x unified',
+                        yaxis_tickformat='.0%',
+                    )
+
+                    st.plotly_chart(fig_dca_vs_lump_sum_return)
